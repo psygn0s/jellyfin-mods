@@ -1,26 +1,30 @@
-
 (function () {
     "use strict";
 
-    const SCRIPT_ID = "__jfHideDuplicatePeopleV2";
+    const SCRIPT_ID = "__jfHideDuplicatePeopleV4";
 
     if (window[SCRIPT_ID]) return;
     window[SCRIPT_ID] = true;
 
-    const PEOPLE_SELECTOR =
-        "#castContent .personCard";
+    const CONTAINER_SELECTOR = "#castContent";
+    const CARD_SELECTOR = ".personCard";
+    const NAME_SELECTOR = ".cardText-first, .cardText, .itemName";
+    const STABILITY_DELAY = 500;
 
-    const NAME_SELECTOR =
-        ".cardText-first, .cardText, .itemName";
+    const cardStates = new WeakMap();
 
-    const DEFAULT_CLASSES = [
-        "defaultCardBackground",
-        "lazy-hidden"
-    ];
+    let observer = null;
+    let cleanupTimer = null;
 
-    const pendingCards = new WeakMap();
-    let observer;
-    let scheduled = false;
+    // Use a data attribute instead of modifying inline display styles.
+    const style = document.createElement("style");
+    style.id = "__jfHideDuplicatePeopleV4Styles";
+    style.textContent = `
+        #castContent .personCard[data-jf-hidden="true"] {
+            display: none !important;
+        }
+    `;
+    document.head.appendChild(style);
 
     function getName(card) {
         const element = card.querySelector(NAME_SELECTOR);
@@ -34,103 +38,164 @@
     function getPortraitState(card) {
         const portrait = card.querySelector(".cardImageContainer");
 
-        if (!portrait) {
-            return "pending";
+        if (!portrait) return "pending";
+
+        const image = portrait.querySelector("img");
+
+        if (image) {
+            if (!image.complete) return "pending";
+            return image.naturalWidth > 0 ? "valid" : "missing";
         }
 
-        if (DEFAULT_CLASSES.some(cls => portrait.classList.contains(cls))) {
-            // lazy-hidden can mean loading is pending, not failure.
-            if (portrait.classList.contains("lazy-hidden")) {
-                return "pending";
-            }
-
-            return "missing";
-        }
-
-        const background = portrait.style.backgroundImage ||
+        const background =
+            portrait.style.backgroundImage ||
             getComputedStyle(portrait).backgroundImage;
 
-        if (background === "none") {
-            const image = portrait.querySelector("img");
+        const hasBackground =
+            background && background !== "none";
 
-            if (image) {
-                if (image.complete && image.naturalWidth > 0) {
-                    return "valid";
-                }
+        const isDefault =
+            portrait.classList.contains("defaultCardBackground");
 
-                if (image.complete && image.naturalWidth === 0) {
-                    return "missing";
-                }
+        const isLazyHidden =
+            portrait.classList.contains("lazy-hidden");
 
-                return "pending";
-            }
+        // Jellyfin's lazy-loading state is not proof of a missing image.
+        if (isLazyHidden) return "pending";
 
-            // Jellyfin may apply the background image later.
-            return "pending";
-        }
+        if (isDefault) return "missing";
 
-        if (background && background !== "none") {
-            return "valid";
-        }
+        if (hasBackground) return "valid";
 
         return "pending";
     }
 
-    function hide(card) {
-        card.dataset.jfPeopleHidden = "true";
-        card.style.setProperty("display", "none", "important");
+    function setHidden(card, hidden) {
+        if (hidden) {
+            card.dataset.jfHidden = "true";
+        } else {
+            delete card.dataset.jfHidden;
+        }
     }
 
-    function show(card) {
-        delete card.dataset.jfPeopleHidden;
-        card.style.removeProperty("display");
+    function resetCard(card, name) {
+        const state = {
+            name,
+            candidate: null,
+            candidateSince: 0,
+            hidden: false
+        };
+
+        cardStates.set(card, state);
+        setHidden(card, false);
+
+        return state;
     }
 
-    function processContainer(container) {
+    function processContainer(container, now) {
         const seen = new Set();
 
-        container.querySelectorAll(".personCard").forEach(card => {
-            const portraitState = getPortraitState(card);
+        container.querySelectorAll(CARD_SELECTOR).forEach(card => {
             const name = getName(card);
+            let state = cardStates.get(card);
 
-            // Wait for Jellyfin to finish loading the portrait.
-            if (portraitState === "pending") {
-                show(card);
-                return;
-            }
-
-            if (portraitState === "missing") {
-                hide(card);
-                return;
+            // Jellyfin may recycle a card for a different person.
+            if (!state || state.name !== name) {
+                state = resetCard(card, name);
             }
 
             if (!name) {
-                show(card);
+                state.candidate = null;
+                setHidden(card, false);
                 return;
             }
 
-            if (seen.has(name)) {
-                hide(card);
+            const portrait = getPortraitState(card);
+
+            // Never change visibility just because an image is loading.
+            if (portrait === "pending") {
+                state.candidate = null;
+
+                if (!state.hidden) {
+                    setHidden(card, false);
+                }
+
                 return;
             }
 
-            seen.add(name);
-            show(card);
+            let reason = null;
+
+            if (portrait === "missing") {
+                reason = "missing";
+            } else if (seen.has(name)) {
+                reason = "duplicate";
+            }
+
+            if (!reason) {
+                seen.add(name);
+                state.candidate = null;
+
+                if (!state.hidden) {
+                    setHidden(card, false);
+                }
+
+                return;
+            }
+
+            // Require the same hide decision to remain stable before
+            // applying it. This helps prevent scroll-related flickering.
+            if (state.candidate !== reason) {
+                state.candidate = reason;
+                state.candidateSince = now;
+                return;
+            }
+
+            if (now - state.candidateSince >= STABILITY_DELAY) {
+                state.hidden = true;
+                setHidden(card, true);
+            }
         });
     }
 
     function cleanPeople() {
-        document.querySelectorAll("#castContent").forEach(processContainer);
+        const now = Date.now();
+
+        document.querySelectorAll(CONTAINER_SELECTOR)
+            .forEach(container => processContainer(container, now));
+
+        // Recheck only if a hide decision is still stabilizing.
+        const needsRecheck = document.querySelector(
+            `${CONTAINER_SELECTOR} ${CARD_SELECTOR}`
+        );
+
+        if (needsRecheck) {
+            const cards = document.querySelectorAll(
+                `${CONTAINER_SELECTOR} ${CARD_SELECTOR}`
+            );
+
+            for (const card of cards) {
+                const state = cardStates.get(card);
+
+                if (
+                    state?.candidate &&
+                    !state.hidden
+                ) {
+                    scheduleCleanup(STABILITY_DELAY);
+                    break;
+                }
+            }
+        }
     }
 
-    function scheduleCleanup() {
-        if (scheduled) return;
-        scheduled = true;
+    function scheduleCleanup(delay = 150) {
+        if (cleanupTimer !== null) {
+            clearTimeout(cleanupTimer);
+        }
 
-        requestAnimationFrame(() => {
-            scheduled = false;
+        cleanupTimer = setTimeout(() => {
+            cleanupTimer = null;
             cleanPeople();
-        });
+        }, delay);
     }
 
     function start() {
@@ -142,22 +207,24 @@
         }
 
         observer = new MutationObserver(mutations => {
-            // Ignore mutations caused only by our own display changes.
-            const relevant = mutations.some(mutation => {
-                if (mutation.type === "childList") {
-                    return true;
+            for (const mutation of mutations) {
+                const target = mutation.target;
+                const element = target instanceof Element
+                    ? target
+                    : target.parentElement;
+
+                if (!element) continue;
+
+                const insideCast =
+                    element.matches(CONTAINER_SELECTOR) ||
+                    element.closest(CONTAINER_SELECTOR) ||
+                    element.querySelector(CONTAINER_SELECTOR);
+
+                if (insideCast) {
+                    scheduleCleanup();
+                    return;
                 }
-
-                if (mutation.type === "attributes") {
-                    const target = mutation.target;
-
-                    return !target.closest?.("[data-jf-people-hidden]");
-                }
-
-                return false;
-            });
-
-            if (relevant) scheduleCleanup();
+            }
         });
 
         observer.observe(document.body, {
