@@ -1,5 +1,5 @@
 
-# Jellyfin Hide Duplicate/Missing People
+# Jellyfin Hide Duplicate/Missing Cast and Crew
 
 A lightweight JavaScript customization for Jellyfin that hides cast and crew cards without portraits and removes duplicate names from the people section.
 
