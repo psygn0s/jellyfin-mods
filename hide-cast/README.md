@@ -5,6 +5,8 @@ A lightweight JavaScript customization for Jellyfin that hides cast and crew car
 
 Designed for use with **Jellyfin JS Injector** and custom Jellyfin themes.
 
+![Hide Cast](https://github.com/psygn0s/jellyfin-mods/blob/main/hide-cast/Screenshots/1.png))
+
 ## Features
 
 - **Hide people without portraits** — hides cards when a missing or default portrait is confirmed.
