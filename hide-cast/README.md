@@ -25,10 +25,18 @@ Designed for use with **Jellyfin JS Injector** and custom Jellyfin themes.
 ## Installation
 
 1. Install and configure the **Jellyfin JS Injector** plugin.
-2. Open the plugin's JavaScript configuration in the Jellyfin dashboard.
-3. Paste the complete contents of the script into the JavaScript configuration.
-4. Save your changes.
-5. Reload Jellyfin Web to apply the customization.
+2. Under Jellyfin's Dashboard - Plugin's - JS Injector.
+3. Click Add Script. Paste this inside.
+```js
+(function () {
+  var s = document.createElement('script');
+  s.src = 'https://cdn.jsdelivr.net/gh/psygn0s/jellyfin-mods@main/hide-cast/hide-cast.js';
+  s.defer = true;
+  document.head.appendChild(s);
+})();
+```
+5. Save your changes.
+6. Reload Jellyfin Web to apply the customization.
 
 If you use a browser cache or a desktop client, perform a full reload or restart the client if the changes do not appear immediately.
 
